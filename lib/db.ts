@@ -1,258 +1,167 @@
 import Database from "better-sqlite3"
-import { hashPassword } from "./auth"
+import { hashSync } from "bcryptjs"
+import path from "path"
 
-const db = new Database("daytrader.db")
+const dbPath = path.join(process.cwd(), "database.sqlite")
+const db = new Database(dbPath)
 
-// Enable foreign keys
-db.pragma("foreign_keys = ON")
-
-// Create tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT UNIQUE NOT NULL,
-    password TEXT NOT NULL,
-    name TEXT NOT NULL,
-    role TEXT DEFAULT 'user',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS articles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    slug TEXT UNIQUE NOT NULL,
-    content TEXT NOT NULL,
-    excerpt TEXT,
-    tags TEXT, -- JSON array
-    status TEXT DEFAULT 'draft',
-    author_id INTEGER,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (author_id) REFERENCES users (id)
-  );
-
-  CREATE TABLE IF NOT EXISTS indicators (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    slug TEXT UNIQUE NOT NULL,
-    description TEXT,
-    content TEXT NOT NULL,
-    categories TEXT, -- JSON array
-    complexity TEXT DEFAULT 'beginner',
-    status TEXT DEFAULT 'draft',
-    author_id INTEGER,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (author_id) REFERENCES users (id)
-  );
-`)
-
-// Create admin user if it doesn't exist
-const checkAdmin = db.prepare("SELECT id FROM users WHERE email = ?")
-const adminExists = checkAdmin.get("admin@daytraderplaybook.com")
-
-if (!adminExists) {
-  const createAdmin = async () => {
-    const hashedPassword = await hashPassword("admin123")
-    const insertAdmin = db.prepare(`
-      INSERT INTO users (email, password, name, role)
-      VALUES (?, ?, ?, ?)
-    `)
-    insertAdmin.run("admin@daytraderplaybook.com", hashedPassword, "Admin", "admin")
-    console.log("Admin user created: admin@daytraderplaybook.com / admin123")
-  }
-  createAdmin()
-}
-
-// Create sample data if tables are empty
-const articleCount = db.prepare("SELECT COUNT(*) as count FROM articles").get() as { count: number }
-const indicatorCount = db.prepare("SELECT COUNT(*) as count FROM indicators").get() as { count: number }
-
-if (articleCount.count === 0) {
-  const insertArticle = db.prepare(`
-    INSERT INTO articles (title, slug, content, excerpt, tags, status, author_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+// Initialize database tables
+export function initializeDatabase() {
+  // Users table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
+      name TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
   `)
 
+  // Articles table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS articles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      excerpt TEXT NOT NULL,
+      content TEXT NOT NULL,
+      tags TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      views INTEGER DEFAULT 0,
+      slug TEXT UNIQUE NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      published_at DATETIME
+    )
+  `)
+
+  // Indicators table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS indicators (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      content TEXT NOT NULL,
+      categories TEXT NOT NULL,
+      complexity TEXT NOT NULL,
+      slug TEXT UNIQUE NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `)
+
+  // Create default admin user if not exists
+  const adminExists = db.prepare("SELECT id FROM users WHERE email = ?").get("admin@daytraderplaybook.com")
+
+  if (!adminExists) {
+    const hashedPassword = hashSync("admin123", 12)
+    db.prepare(`
+      INSERT INTO users (email, password, name)
+      VALUES (?, ?, ?)
+    `).run("admin@daytraderplaybook.com", hashedPassword, "Admin User")
+  }
+
+  // Insert sample data if tables are empty
+  const articleCount = db.prepare("SELECT COUNT(*) as count FROM articles").get() as { count: number }
+
+  if (articleCount.count === 0) {
+    insertSampleData()
+  }
+}
+
+function insertSampleData() {
+  // Sample articles
   const sampleArticles = [
     {
-      title: "NQ Futures Market Analysis - December 2024",
-      slug: "nq-futures-market-analysis-december-2024",
-      content: `# NQ Futures Market Analysis - December 2024
-
-## Market Overview
-
-The Nasdaq-100 futures (NQ) have shown significant volatility in December 2024, with key technical levels being tested repeatedly. This analysis covers the major market internals and breadth indicators that are driving current price action.
-
-## Key Market Internals
-
-### NYSE TICK Analysis
-The NYSE TICK has been showing extreme readings, with multiple +1000 and -1000 spikes indicating high institutional activity. These extremes often precede significant directional moves in the NQ.
-
-### Advance/Decline Data
-The advance/decline ratio has been deteriorating, suggesting underlying weakness despite recent highs. This divergence is worth monitoring for potential reversal signals.
-
-## Trading Implications
-
-Based on current market internals:
-- Watch for TICK extremes as entry signals
-- Monitor volume participation on breakouts
-- Use breadth divergences for timing exits
-
-## Conclusion
-
-The current market environment requires careful attention to internals rather than just price action. The divergences we're seeing suggest caution is warranted.`,
+      title: "NQ Futures Breakout Strategy: How I Caught the 21470 Level",
       excerpt:
-        "Comprehensive analysis of NQ futures market conditions in December 2024, focusing on market internals and breadth indicators.",
-      tags: JSON.stringify(["NQ", "Market Analysis", "Technical Analysis", "Futures"]),
+        "Today's NQ session showed a perfect example of our cumulative TICK divergence setup. The market pushed through key resistance at 21470 with strong momentum...",
+      content: `<h2>The Market Setup - Long Conditions Persist</h2>
+<p>This morning's NQ session presented one of those textbook setups that every breakout trader dreams of. The market had been consolidating near the 21450-21470 resistance zone for several days, with multiple failed attempts to break higher.</p>
+<p>What made today different was the underlying market internals, particularly the cumulative TICK behavior that I've been tracking throughout the week.</p>`,
+      tags: JSON.stringify(["NQ", "Breakout", "TICK", "Support/Resistance"]),
       status: "published",
-      authorId: 1,
+      slug: "nq-futures-breakout-strategy-21470-level",
+      views: 1247,
+      published_at: new Date().toISOString(),
     },
     {
-      title: "Understanding Market Breadth Indicators",
-      slug: "understanding-market-breadth-indicators",
-      content: `# Understanding Market Breadth Indicators
-
-Market breadth indicators are essential tools for understanding the underlying health of the market beyond just price movements.
-
-## What Are Breadth Indicators?
-
-Breadth indicators measure the participation of individual stocks in market moves. They help identify:
-- Market strength or weakness
-- Potential reversals
-- Confirmation of trends
-
-## Key Breadth Indicators
-
-### Advance/Decline Line
-Tracks the cumulative difference between advancing and declining stocks.
-
-### McClellan Oscillator
-A momentum oscillator based on advance/decline data.
-
-### Up/Down Volume Ratio
-Compares volume in advancing vs declining stocks.
-
-## Application in NQ Trading
-
-These indicators are particularly useful for NQ futures trading because they provide early warning signals for market turns.`,
-      excerpt: "Learn how to use market breadth indicators to improve your NQ futures trading decisions.",
-      tags: JSON.stringify(["Market Breadth", "Technical Analysis", "Education"]),
+      title: "Advanced/Decline Analysis: Why the NYSE TICK Matters for NQ Traders",
+      excerpt:
+        "Understanding the relationship between NYSE advance/decline data and NQ price action can give you a significant edge in your day trading...",
+      content: `<h2>Understanding Market Breadth</h2>
+<p>The NYSE TICK indicator provides crucial insights into market sentiment and internal strength...</p>`,
+      tags: JSON.stringify(["NYSE", "TICK", "Analysis", "Market Structure"]),
       status: "published",
-      authorId: 1,
+      slug: "advance-decline-analysis-nyse-tick-nq-traders",
+      views: 956,
+      published_at: new Date().toISOString(),
     },
   ]
+
+  const insertArticle = db.prepare(`
+    INSERT INTO articles (title, excerpt, content, tags, status, slug, views, published_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `)
 
   sampleArticles.forEach((article) => {
     insertArticle.run(
       article.title,
-      article.slug,
-      article.content,
       article.excerpt,
+      article.content,
       article.tags,
       article.status,
-      article.authorId,
+      article.slug,
+      article.views,
+      article.published_at,
     )
   })
-}
 
-if (indicatorCount.count === 0) {
-  const insertIndicator = db.prepare(`
-    INSERT INTO indicators (name, slug, description, content, categories, complexity, status, author_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `)
-
+  // Sample indicators
   const sampleIndicators = [
     {
-      name: "NYSE TICK Indicator",
-      slug: "nyse-tick-indicator",
+      name: "Cumulative TICK Indicator",
       description:
-        "Real-time measure of market sentiment showing the difference between upticking and downticking stocks on the NYSE.",
-      content: `# NYSE TICK Indicator
-
-## Overview
-The NYSE TICK is one of the most important real-time sentiment indicators for day traders. It measures the difference between the number of stocks trading on an uptick versus a downtick on the New York Stock Exchange.
-
-## How It Works
-- Positive TICK values indicate more stocks are upticking
-- Negative TICK values indicate more stocks are downticking
-- Extreme readings (+1000 or -1000) often signal short-term reversals
-
-## Trading Applications
-### Entry Signals
-- TICK extremes often provide excellent entry points
-- Look for divergences between TICK and price action
-- Use TICK to confirm breakout strength
-
-### Risk Management
-- Extreme TICK readings can signal overbought/oversold conditions
-- Use TICK to time exits on momentum trades
-
-## Key Levels
-- +1000: Extreme bullish reading
-- +500: Strong bullish sentiment
-- 0: Neutral
-- -500: Strong bearish sentiment
-- -1000: Extreme bearish reading`,
-      categories: JSON.stringify(["sentiment", "breadth", "real-time"]),
-      complexity: "beginner",
-      status: "published",
-      authorId: 1,
+        "Master the most powerful market sentiment indicator used by professional NQ traders to identify momentum extremes and confirm breakout setups.",
+      content: `<h2>What is the Cumulative TICK Indicator?</h2>
+<p>The Cumulative TICK indicator is a running total of the NYSE TICK readings that provides a real-time measure of market sentiment and internal strength...</p>`,
+      categories: JSON.stringify(["Market Breadth", "Sentiment"]),
+      complexity: "intermediate",
+      slug: "cumulative-tick-indicator",
     },
     {
-      name: "Cumulative TICK",
-      slug: "cumulative-tick",
+      name: "Advance/Decline Line Analysis",
       description:
-        "A running total of NYSE TICK readings that helps identify longer-term market bias and momentum shifts.",
-      content: `# Cumulative TICK Indicator
-
-## What is Cumulative TICK?
-The Cumulative TICK is a running total of NYSE TICK readings throughout the trading session. It provides insight into the overall market bias and helps identify momentum shifts.
-
-## Calculation
-Simply add each TICK reading to the previous cumulative total:
-Cumulative TICK = Previous Cumulative TICK + Current TICK
-
-## Interpretation
-### Upward Slope
-- Indicates sustained buying pressure
-- Confirms bullish momentum
-- Supports long positions
-
-### Downward Slope
-- Shows persistent selling pressure
-- Confirms bearish momentum
-- Supports short positions
-
-### Divergences
-- Price making new highs while Cumulative TICK fails to confirm
-- Often signals potential reversal
-
-## Trading Strategy
-1. Use slope direction for bias
-2. Look for divergences with price
-3. Combine with other breadth indicators
-4. Time entries with regular TICK extremes`,
-      categories: JSON.stringify(["sentiment", "breadth", "momentum"]),
-      complexity: "intermediate",
-      status: "published",
-      authorId: 1,
+        "The classic measure of market breadth. Track the cumulative difference between advancing and declining stocks to assess the internal health and strength of market moves.",
+      content: `<h2>Understanding the Advance/Decline Line</h2>
+<p>The Advance/Decline Line is one of the most fundamental market breadth indicators...</p>`,
+      categories: JSON.stringify(["Market Breadth"]),
+      complexity: "beginner",
+      slug: "advance-decline-line-analysis",
     },
   ]
 
+  const insertIndicator = db.prepare(`
+    INSERT INTO indicators (name, description, content, categories, complexity, slug, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+
+  const now = new Date().toISOString()
   sampleIndicators.forEach((indicator) => {
     insertIndicator.run(
       indicator.name,
-      indicator.slug,
       indicator.description,
       indicator.content,
       indicator.categories,
       indicator.complexity,
-      indicator.status,
-      indicator.authorId,
+      indicator.slug,
+      now,
+      now
     )
   })
 }
 
-export { db }
+// Initialize database on import
+initializeDatabase()
+
+export default db

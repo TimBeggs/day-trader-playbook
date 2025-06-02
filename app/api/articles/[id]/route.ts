@@ -1,125 +1,60 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { db } from "@/lib/db"
-import { getServerSession } from "@/lib/auth"
+import db from "@/lib/db"
+import { requireAuth } from "@/lib/auth"
+import type { Article, CreateArticleData } from "@/types"
 
-// Get article by ID
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
-  try {
-    const id = Number.parseInt(params.id)
-
-    if (isNaN(id)) {
-      return NextResponse.json({ error: "Invalid article ID" }, { status: 400 })
-    }
-
-    const article = await db.article.findUnique({
-      where: { id },
-      include: {
-        author: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-      },
-    })
-
-    if (!article) {
-      return NextResponse.json({ error: "Article not found" }, { status: 404 })
-    }
-
-    return NextResponse.json({ article })
-  } catch (error) {
-    console.error("Error fetching article:", error)
-    return NextResponse.json({ error: "Failed to fetch article" }, { status: 500 })
-  }
-}
-
-// Update article
 export async function PUT(request: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const session = await getServerSession()
+    await requireAuth()
 
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
+    const data: CreateArticleData = await request.json()
+    const articleId = Number.parseInt(params.id)
 
-    const id = Number.parseInt(params.id)
+    // Generate slug from title if needed
+    const slug = data.title
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, "")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .trim()
 
-    if (isNaN(id)) {
-      return NextResponse.json({ error: "Invalid article ID" }, { status: 400 })
-    }
+    const now = new Date().toISOString()
+    const publishedAt = data.status === "published" ? now : null
 
-    const { title, content, excerpt, tags, status } = await request.json()
+    db.prepare(`
+      UPDATE articles 
+      SET title = ?, excerpt = ?, content = ?, tags = ?, status = ?, slug = ?, updated_at = ?, published_at = ?
+      WHERE id = ?
+    `).run(
+      data.title,
+      data.excerpt,
+      data.content,
+      JSON.stringify(data.tags),
+      data.status,
+      slug,
+      now,
+      publishedAt,
+      articleId,
+    )
 
-    if (!title || !content) {
-      return NextResponse.json({ error: "Title and content are required" }, { status: 400 })
-    }
+    const article = db.prepare("SELECT * FROM articles WHERE id = ?").get(articleId) as Article
 
-    // Check if article exists and user has permission
-    const existingArticle = await db.article.findUnique({
-      where: { id },
+    return NextResponse.json({
+      ...article,
+      tags: JSON.parse(article.tags as string),
     })
-
-    if (!existingArticle) {
-      return NextResponse.json({ error: "Article not found" }, { status: 404 })
-    }
-
-    // Only allow the author or admin to update
-    if (existingArticle.authorId !== session.user.id && session.user.role !== "ADMIN") {
-      return NextResponse.json({ error: "You don't have permission to update this article" }, { status: 403 })
-    }
-
-    const updatedArticle = await db.article.update({
-      where: { id },
-      data: {
-        title,
-        content,
-        excerpt,
-        tags,
-        status,
-        updatedAt: new Date(),
-      },
-    })
-
-    return NextResponse.json({ article: updatedArticle })
   } catch (error) {
     console.error("Error updating article:", error)
     return NextResponse.json({ error: "Failed to update article" }, { status: 500 })
   }
 }
 
-// Delete article
 export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const session = await getServerSession()
+    await requireAuth()
 
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
-
-    const id = Number.parseInt(params.id)
-
-    if (isNaN(id)) {
-      return NextResponse.json({ error: "Invalid article ID" }, { status: 400 })
-    }
-
-    // Check if article exists and user has permission
-    const existingArticle = await db.article.findUnique({
-      where: { id },
-    })
-
-    if (!existingArticle) {
-      return NextResponse.json({ error: "Article not found" }, { status: 404 })
-    }
-
-    // Only allow the author or admin to delete
-    if (existingArticle.authorId !== session.user.id && session.user.role !== "ADMIN") {
-      return NextResponse.json({ error: "You don't have permission to delete this article" }, { status: 403 })
-    }
-
-    await db.article.delete({
-      where: { id },
-    })
+    const articleId = Number.parseInt(params.id)
+    db.prepare("DELETE FROM articles WHERE id = ?").run(articleId)
 
     return NextResponse.json({ success: true })
   } catch (error) {

@@ -1,75 +1,62 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { db } from "@/lib/db"
-import { getServerSession } from "@/lib/auth"
+import db from "@/lib/db"
+import { requireAuth } from "@/lib/auth"
+import type { Article, CreateArticleData } from "@/types"
 
-// Get all articles
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
-    const searchParams = request.nextUrl.searchParams
-    const limit = Number.parseInt(searchParams.get("limit") || "10")
-    const page = Number.parseInt(searchParams.get("page") || "1")
-    const skip = (page - 1) * limit
+    const articles = db
+      .prepare(`
+      SELECT id, title, excerpt, content, tags, status, views, slug, created_at, updated_at, published_at
+      FROM articles 
+      WHERE status = 'published'
+      ORDER BY created_at DESC
+    `)
+      .all() as Article[]
 
-    const articles = await db.article.findMany({
-      take: limit,
-      skip,
-      orderBy: {
-        createdAt: "desc",
-      },
-      include: {
-        author: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-      },
-    })
+    // Parse tags JSON
+    const articlesWithParsedTags = articles.map((article) => ({
+      ...article,
+      tags: JSON.parse(article.tags as string),
+    }))
 
-    const total = await db.article.count()
-
-    return NextResponse.json({
-      articles,
-      pagination: {
-        total,
-        page,
-        limit,
-        pages: Math.ceil(total / limit),
-      },
-    })
+    return NextResponse.json(articlesWithParsedTags)
   } catch (error) {
     console.error("Error fetching articles:", error)
     return NextResponse.json({ error: "Failed to fetch articles" }, { status: 500 })
   }
 }
 
-// Create a new article
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession()
+    await requireAuth()
 
-    if (!session) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
+    const data: CreateArticleData = await request.json()
 
-    const { title, content, excerpt, tags, status = "draft" } = await request.json()
+    // Generate slug from title
+    const slug = data.title
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, "")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .trim()
 
-    if (!title || !content) {
-      return NextResponse.json({ error: "Title and content are required" }, { status: 400 })
-    }
+    const now = new Date().toISOString()
+    const publishedAt = data.status === "published" ? now : null
 
-    const article = await db.article.create({
-      data: {
-        title,
-        content,
-        excerpt,
-        tags,
-        status,
-        authorId: session.user.id,
-      },
+    const result = db
+      .prepare(`
+      INSERT INTO articles (title, excerpt, content, tags, status, slug, created_at, updated_at, published_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+      .run(data.title, data.excerpt, data.content, JSON.stringify(data.tags), data.status, slug, now, now, publishedAt)
+
+    const article = db.prepare("SELECT * FROM articles WHERE id = ?").get(result.lastInsertRowid) as Article
+
+    return NextResponse.json({
+      ...article,
+      tags: JSON.parse(article.tags as string),
     })
-
-    return NextResponse.json({ article }, { status: 201 })
   } catch (error) {
     console.error("Error creating article:", error)
     return NextResponse.json({ error: "Failed to create article" }, { status: 500 })
